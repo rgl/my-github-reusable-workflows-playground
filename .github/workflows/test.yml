@@ -1,0 +1,62 @@
+name: test
+on:
+  - push
+  - workflow_dispatch
+jobs:
+  ubuntu-runner-info:
+    # see https://github.com/rgl/my-github-reusable-workflows/blob/main/.github/workflows/ubuntu-runner-info.yml
+    uses: rgl/my-github-reusable-workflows/.github/workflows/ubuntu-runner-info.yml@main
+    permissions:
+      id-token: write
+    with:
+      runner: ubuntu-24.04
+  dump-example-id-token:
+    runs-on: ubuntu-24.04
+    needs: ubuntu-runner-info
+    permissions:
+      id-token: write
+    steps:
+      # see https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows
+      - name: Get Example ID Token
+        uses: actions/github-script@v7
+        id: example_id_token
+        with:
+          script: |
+            const token = await core.getIDToken('https://example.com');
+            core.setOutput('id_token', token);
+      # dump the example id token to the job output.
+      # NB you should compare this token with the one that is displayed in the
+      #    ubuntu-runner-info job from within the ubuntu-runner-info.yml
+      #    reusable workflow; its job_workflow_ref claim will point to the
+      #    reusable workflow, and its workflow_ref will point to this test.yml
+      #    workflow.
+      # NB never do this is a real job because the jwt should remain secret.
+      - name: Dump Example ID Token
+        env:
+          EXAMPLE_ID_TOKEN: ${{ steps.example_id_token.outputs.id_token }}
+          REUSABLE_WORKFLOW_JOB_WORKFLOW_REF: ${{ needs.ubuntu-runner-info.outputs.job_workflow_ref }}
+          REUSABLE_WORKFLOW_JOB_WORKFLOW_SHA: ${{ needs.ubuntu-runner-info.outputs.job_workflow_sha }}
+        shell: bash
+        run: |
+          exec 2>&1
+          set -euxo pipefail
+          echo "$EXAMPLE_ID_TOKEN" | base64
+          python3 <<'EOF'
+          import os, base64, json
+          token = os.getenv('EXAMPLE_ID_TOKEN')
+          claims = json.loads(
+            base64.urlsafe_b64decode(
+              token.split('.')[1] + '===').decode('utf-8'))
+          print('claims:', json.dumps(claims, indent=2))
+          workflow_ref = claims['workflow_ref']
+          workflow_sha = claims['workflow_sha']
+          job_workflow_ref = claims['job_workflow_ref']
+          job_workflow_sha = claims['job_workflow_sha']
+          reusable_workflow_job_workflow_ref = os.getenv(
+            'REUSABLE_WORKFLOW_JOB_WORKFLOW_REF')
+          reusable_workflow_job_workflow_sha = os.getenv(
+            'REUSABLE_WORKFLOW_JOB_WORKFLOW_SHA')
+          print(f'this workflow:                  {workflow_sha} {workflow_ref}')
+          print(f'this job_workflow:              {job_workflow_sha} {job_workflow_ref}')
+          print(f'reusable workflow job_workflow: {reusable_workflow_job_workflow_sha} {reusable_workflow_job_workflow_ref}')
+          EOF
